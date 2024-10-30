@@ -1,5 +1,6 @@
 import os
-from langchain_community.document_loaders import WebBaseLoader
+import asyncio
+from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
@@ -11,30 +12,41 @@ from langchain_ollama import ChatOllama
 model = ChatOllama(
     model="llama3.2",
 )
-# Set the USER_AGENT environment variable
 os.environ['USER_AGENT'] = 'myagent'
 
+async def load_and_split_data(file_paths, chunk_size=500, chunk_overlap=100):
+    data = []
+    successfully_loaded_files = []
+    failed_files = []
 
-# Function to load and split data
-def load_and_split_data(url, chunk_size=500, chunk_overlap=100):
-    loader = WebBaseLoader(url)
-    data = loader.load()
+    for file_path in file_paths:
+        try:
+            loader = PyPDFLoader(file_path)
+            async for page in loader.alazy_load():
+                data.append(page)
+            successfully_loaded_files.append(file_path)
+        except Exception as e:
+            print(f"Failed to load {file_path}: {e}")
+            failed_files.append(file_path)
+
+    if data:
+        print("Documents loaded successfully.")
+    else:
+        print("Failed to load documents.")
+
+    print(f"Successfully loaded files: {successfully_loaded_files}")
+    print(f"Failed files: {failed_files}")
+
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     return text_splitter.split_documents(data)
 
-
-# Function to create embeddings and vector store
 def create_vectorstore(documents, model_name="nomic-embed-text"):
     local_embeddings = OllamaEmbeddings(model=model_name)
     return Chroma.from_documents(documents=documents, embedding=local_embeddings)
 
-
-# Function to format documents
 def format_docs(docs):
     return "\n\n".join(doc.page_content for doc in docs)
 
-
-# Function to create the chain
 def create_chain():
     RAG_TEMPLATE = """
     You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question. If you don't know the answer, just say that you don't know. Use three sentences maximum and keep the answer concise.
@@ -57,10 +69,17 @@ def create_chain():
             | StrOutputParser()
     )
 
+async def chatbot(folder_path):
+    if not os.path.exists(folder_path):
+        print(f"Error: The folder path '{folder_path}' does not exist.")
+        return
 
-# Chatbot interaction loop
-def chatbot(url):
-    all_splits = load_and_split_data(url)
+    file_paths = [os.path.join(folder_path, f) for f in os.listdir(folder_path) if f.endswith('.pdf')]
+    if not file_paths:
+        print(f"No PDF files found in the folder '{folder_path}'.")
+        return
+
+    all_splits = await load_and_split_data(file_paths)
     vectorstore = create_vectorstore(all_splits)
     chain = create_chain()
 
@@ -73,6 +92,5 @@ def chatbot(url):
         response = chain.invoke({"context": docs, "question": question})
         print("Bot:", response)
 
-
 # Run the chatbot
-chatbot("https://lilianweng.github.io/posts/2023-06-23-agent/")
+asyncio.run(chatbot("/Users/justoanff/PycharmProjects/Langchain_RAG/data"))
